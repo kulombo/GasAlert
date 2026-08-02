@@ -1,0 +1,38 @@
+name: Gasoil Alert diario
+
+on:
+  schedule:
+    # Hora en UTC. 6:00 UTC = 8:00 en España en horario de verano (CEST, UTC+2)
+    # 7:00 UTC = 8:00 en España en horario de invierno (CET, UTC+1)
+    - cron: '0 6 * * *'
+  workflow_dispatch: {}   # permite lanzarlo manualmente desde la pestaña "Actions" para probar
+
+jobs:
+  enviar-alerta:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Configurar JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+
+      - name: Compilar
+        run: mvn -B package --file pom.xml
+
+      - name: Ejecutar y enviar email
+        env:
+          CENTRO_LAT: ${{ vars.CENTRO_LAT }}
+          CENTRO_LON: ${{ vars.CENTRO_LON }}
+          RADIO_KM: ${{ vars.RADIO_KM }}
+          MAX_RESULTADOS: ${{ vars.MAX_RESULTADOS }}
+          SMTP_HOST: ${{ vars.SMTP_HOST }}
+          SMTP_PORT: ${{ vars.SMTP_PORT }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: java -jar target/gasoil-alert-1.0.jar
