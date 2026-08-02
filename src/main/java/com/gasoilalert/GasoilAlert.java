@@ -48,7 +48,7 @@ public class GasoilAlert {
     }
 
     public static void main(String[] args) throws Exception {
-        String json = descargarPreciosConReintentos(3);
+        String json = descargarPreciosConReintentos(0); // el nº de intentos ya no se limita; ver TIEMPO_MAX_ESPERA_MIN
         List<Estacion> estaciones = filtrarPorRadio(json, CENTRO_LAT, CENTRO_LON, RADIO_KM);
 
         if (estaciones.isEmpty()) {
@@ -196,23 +196,41 @@ public class GasoilAlert {
         return R * c;
     }
 
-    /** Reintenta la descarga varias veces si el servidor del Ministerio falla de forma intermitente
-     *  (corte de conexión, timeout, error 5xx...), esperando un poco más entre cada intento. */
-    private static String descargarPreciosConReintentos(int intentosMax) throws Exception {
+    /** Minutos máximos que se insiste en descargar el JSON antes de rendirse.
+     *  El servidor del Ministerio a veces corta la conexión (handshake TLS) de forma intermitente,
+     *  sobre todo desde IPs de datacenter como las de GitHub Actions; casi siempre basta con reintentar.
+     *  Configurable por variable de entorno para no dejar el job colgado si el bloqueo es persistente. */
+    private static final int TIEMPO_MAX_ESPERA_MIN = Integer.parseInt(env("TIEMPO_MAX_ESPERA_MIN", "30"));
+
+    /** Reintenta la descarga SIN LÍMITE DE INTENTOS hasta conseguirlo, con espera creciente
+     *  entre cada intento (backoff exponencial con tope), hasta un tiempo máximo total. */
+    private static String descargarPreciosConReintentos(int intentosIgnorado) throws Exception {
+        long limiteMillis = System.currentTimeMillis() + TIEMPO_MAX_ESPERA_MIN * 60_000L;
         Exception ultimoError = null;
-        for (int intento = 1; intento <= intentosMax; intento++) {
+        int intento = 0;
+
+        while (System.currentTimeMillis() < limiteMillis) {
+            intento++;
             try {
                 return descargarPrecios();
             } catch (Exception e) {
                 ultimoError = e;
-                System.out.println("Intento " + intento + "/" + intentosMax
-                        + " fallido al descargar precios: " + e.getMessage());
-                if (intento < intentosMax) {
-                    Thread.sleep(3000L * intento); // 3s, 6s, 9s...
-                }
+                long segundosRestantes = (limiteMillis - System.currentTimeMillis()) / 1000;
+                System.out.println("Intento " + intento + " fallido al descargar precios: " + e.getMessage()
+                        + " (quedan ~" + Math.max(segundosRestantes, 0) + "s antes de rendirse)");
+
+                if (System.currentTimeMillis() >= limiteMillis) break;
+
+                // Backoff exponencial con tope de 60s, más un poco de aleatoriedad
+                // para no repetir el fallo justo en el mismo instante cada vez.
+                long esperaMs = Math.min(3000L * (1L << Math.min(intento, 6)), 60_000L);
+                esperaMs += (long) (Math.random() * 2000);
+                Thread.sleep(esperaMs);
             }
         }
-        throw new RuntimeException("No se pudo descargar el JSON de precios tras " + intentosMax + " intentos", ultimoError);
+
+        throw new RuntimeException("No se pudo descargar el JSON de precios tras " + intento
+                + " intentos en " + TIEMPO_MAX_ESPERA_MIN + " minutos", ultimoError);
     }
 
     /** Descarga el JSON completo de la API pública.
