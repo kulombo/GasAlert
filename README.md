@@ -110,43 +110,59 @@ El `.gitignore` ya excluye `target/`, así que no subirás binarios compilados.
 **No subas tu `EMAIL_PASSWORD` en el código** — se configura como variable
 de entorno en Render (paso siguiente), no en el repositorio.
 
-## 5. Desplegar en Render como Cron Job (ejecución diaria 24/7)
+## 5. Ejecución diaria GRATIS con GitHub Actions (recomendado)
 
-Como el programa solo necesita ejecutarse **una vez al día** y termina, el
-servicio ideal en Render no es un "Web Service" que esté siempre encendido,
-sino un **Cron Job**:
+> **Nota:** Render eliminó su plan gratuito de Cron Jobs — ahora cobra desde
+> ~$1/mes. Como este programa solo necesita ejecutarse una vez al día
+> durante unos segundos, **GitHub Actions es la opción gratuita** más
+> sencilla, y como el código ya está en GitHub, no hace falta añadir ningún
+> servicio externo.
 
-1. En el dashboard de Render: **New +** → **Cron Job**.
-2. Conecta tu repositorio de GitHub (`gasoil-alert`).
-3. **Runtime**: Docker, o si Render detecta Java, "Native Environment" con:
-   - **Build Command**: `mvn package`
-   - **Command** (lo que se ejecuta cada vez): `java -jar target/gasoil-alert-1.0.jar`
-4. **Schedule**: expresión cron, por ejemplo `0 7 * * *` (todos los días a
-   las 7:00 UTC — ajusta según tu franja horaria, España en verano es UTC+2).
-5. En **Environment Variables**, añade `EMAIL_FROM`, `EMAIL_PASSWORD`,
-   `EMAIL_TO` y, si quieres cambiar el radio o el centro, `RADIO_KM`,
-   `CENTRO_LAT`, `CENTRO_LON`.
-6. Guarda y despliega. Render ejecutará el jar a la hora programada, enviará
-   el correo, y el proceso terminará (no consume recursos el resto del día).
+El archivo `.github/workflows/gasoil-alert.yml` ya incluido en este
+proyecto hace todo el trabajo: cada día, a la hora programada, GitHub
+levanta una máquina temporal, compila el proyecto con Maven, ejecuta el
+jar (que envía el email) y apaga la máquina. No pagas nada mientras no se
+esté ejecutando.
 
-### Alternativa: Dockerfile (recomendado si Render no detecta Maven/Java bien)
+### Configurar las credenciales (sin tocar el código)
 
-Si prefieres máximo control, añade este `Dockerfile` en la raíz del proyecto:
+1. En tu repositorio de GitHub: **Settings → Secrets and variables → Actions**.
+2. Pestaña **"Secrets"** → **New repository secret** → crea estos tres
+   (son datos sensibles, no aparecerán en los logs):
+   - `EMAIL_FROM`
+   - `EMAIL_PASSWORD` (la contraseña de aplicación de Gmail)
+   - `EMAIL_TO`
+3. Pestaña **"Variables"** (opcional, solo si quieres cambiar los valores
+   por defecto) → **New repository variable**:
+   - `RADIO_KM` (por defecto 15 si no la defines)
+   - `CENTRO_LAT`, `CENTRO_LON` (por defecto, Arahal)
+   - `MAX_RESULTADOS`, `SMTP_HOST`, `SMTP_PORT`
 
-```dockerfile
-FROM maven:3.9-eclipse-temurin-17 AS build
-WORKDIR /app
-COPY . .
-RUN mvn package -q
+### Probarlo sin esperar a la hora programada
 
-FROM eclipse-temurin:17-jre
-WORKDIR /app
-COPY --from=build /app/target/gasoil-alert-1.0.jar app.jar
-CMD ["java", "-jar", "app.jar"]
-```
+1. Ve a la pestaña **"Actions"** de tu repositorio.
+2. Selecciona el workflow **"Gasoil Alert diario"**.
+3. Botón **"Run workflow"** (aparece gracias a `workflow_dispatch` en el
+   archivo yml) → **Run workflow**.
+4. En unos segundos verás los logs de la ejecución y, si todo va bien, el
+   email te llegará igual que en local.
 
-Y en Render, al crear el Cron Job, elige **Runtime: Docker** — detectará el
-`Dockerfile` automáticamente y no necesitas configurar build/start command.
+### Sobre la hora exacta
+
+Las expresiones cron de GitHub Actions van en **UTC**, y GitHub advierte
+que en horas de mucha carga la ejecución puede retrasarse unos minutos
+(no está garantizada al segundo, pero para un email diario es más que
+suficiente). El archivo ya viene configurado a las `6:00 UTC` (8:00 de la
+mañana en España en horario de verano); si quieres cambiar la hora, edita
+la línea `cron:` del archivo `.github/workflows/gasoil-alert.yml`.
+
+### Si en el futuro prefieres Render de todos modos
+
+Sigue siendo una opción válida si algún día quieres algo con más control o
+dashboard propio, solo que ya no es gratis para Cron Jobs. El mismo
+`pom.xml` funciona igual; como Build Command usarías `mvn package` y como
+Command `java -jar target/gasoil-alert-1.0.jar`, configurando las mismas
+variables de entorno en la sección "Environment" del servicio.
 
 ## Notas
 

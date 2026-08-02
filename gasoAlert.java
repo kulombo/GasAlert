@@ -33,9 +33,9 @@ public class GasoilAlert {
 
     private static final String SMTP_HOST = env("SMTP_HOST", "smtp.gmail.com");
     private static final int SMTP_PORT = Integer.parseInt(env("SMTP_PORT", "587"));
-    private static final String EMAIL_FROM = env("EMAIL_FROM", "tu_correo@gmail.com");
+    private static final String EMAIL_FROM = env("EMAIL_FROM", "juanmanuelsanchezgamboa2004@gmail.com");
     private static final String EMAIL_PASSWORD = env("EMAIL_PASSWORD", "tu_contraseña_de_aplicacion");
-    private static final String EMAIL_TO = env("EMAIL_TO", "tu_correo@gmail.com");
+    private static final String EMAIL_TO = env("EMAIL_TO", "juanmanuelsanchezgamboa2004@gmail.com");
     // ==========================================================================================
 
     private static final String API_URL =
