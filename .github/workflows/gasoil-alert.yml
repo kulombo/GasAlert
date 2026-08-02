@@ -10,6 +10,7 @@ on:
 jobs:
   enviar-alerta:
     runs-on: ubuntu-latest
+    timeout-minutes: 40   # margen sobre TIEMPO_MAX_ESPERA_MIN (30 min) + compilación/envío
     steps:
       - name: Descargar el código
         uses: actions/checkout@v4
