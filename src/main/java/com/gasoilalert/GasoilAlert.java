@@ -53,11 +53,22 @@ public class GasoilAlert {
 
         if (estaciones.isEmpty()) {
             System.out.println("No se encontraron estaciones con gasóleo A en un radio de " + RADIO_KM + " km.");
-            enviarEmail(
-                "Gasoil cerca de Arahal: sin datos hoy",
-                "No se encontraron estaciones con precio de Gasóleo A disponible en un radio de "
-                    + RADIO_KM + " km alrededor del punto configurado."
-            );
+            String mensajeSinDatos = "No se encontraron estaciones con precio de Gasóleo A disponible en un radio de "
+                    + RADIO_KM + " km alrededor del punto configurado.";
+            String htmlSinDatos = "<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"UTF-8\"></head>"
+                    + "<body style=\"margin:0;padding:0;background:#f0f2f5;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;\">"
+                    + "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f0f2f5;padding:24px 0;\">"
+                    + "<tr><td align=\"center\">"
+                    + "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" "
+                    + "style=\"background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);\">"
+                    + "<tr><td style=\"background:linear-gradient(135deg,#1e6091,#1a759f);padding:28px 32px;\">"
+                    + "<div style=\"font-size:22px;font-weight:700;color:#ffffff;\">⛽ Precios de Gasóleo A</div>"
+                    + "</td></tr>"
+                    + "<tr><td style=\"padding:28px 32px;\">"
+                    + "<div style=\"font-size:15px;color:#52606d;line-height:1.5;\">" + escapeHtml(mensajeSinDatos) + "</div>"
+                    + "</td></tr>"
+                    + "</table></td></tr></table></body></html>";
+            enviarEmail("Gasoil cerca de Arahal: sin datos hoy", mensajeSinDatos, htmlSinDatos);
             return;
         }
 
@@ -65,9 +76,19 @@ public class GasoilAlert {
         List<Estacion> topN = estaciones.subList(0, Math.min(MAX_RESULTADOS, estaciones.size()));
         Estacion masBarata = topN.get(0);
 
-        String asunto = String.format("Gasoil más barato cerca de Arahal: %.3f €/L - %s (%s)",
+        String asunto = String.format("⛽ Gasoil más barato cerca de Arahal: %.3f €/L - %s (%s)",
                 masBarata.precioGasoleoA, masBarata.nombre, masBarata.municipio);
 
+        String cuerpoTexto = construirCuerpoTexto(topN);
+        String cuerpoHtml = construirCuerpoHtml(topN);
+
+        System.out.println(cuerpoTexto);
+        enviarEmail(asunto, cuerpoTexto, cuerpoHtml);
+        System.out.println("Correo enviado correctamente.");
+    }
+
+    /** Versión en texto plano (fallback para clientes de correo que no muestran HTML). */
+    private static String construirCuerpoTexto(List<Estacion> topN) {
         StringBuilder cuerpo = new StringBuilder();
         cuerpo.append("Gasolineras más baratas en Gasóleo A en un radio de ")
               .append((int) RADIO_KM).append(" km alrededor de Arahal:\n\n");
@@ -77,10 +98,86 @@ public class GasoilAlert {
             cuerpo.append(String.format("%-30s %-15s %8.3f %7.1f%n",
                     recortar(e.nombre, 30), recortar(e.municipio, 15), e.precioGasoleoA, e.distanciaKm));
         }
+        return cuerpo.toString();
+    }
 
-        System.out.println(cuerpo);
-        enviarEmail(asunto, cuerpo.toString());
-        System.out.println("Correo enviado correctamente.");
+    /** Versión en HTML: tabla con estilos, precio más barato destacado y filas alternas. */
+    private static String construirCuerpoHtml(List<Estacion> topN) {
+        Estacion mejor = topN.get(0);
+        double masCara = topN.stream().mapToDouble(e -> e.precioGasoleoA).max().orElse(mejor.precioGasoleoA);
+        double ahorro = masCara - mejor.precioGasoleoA;
+
+        StringBuilder filas = new StringBuilder();
+        for (int i = 0; i < topN.size(); i++) {
+            Estacion e = topN.get(i);
+            boolean esMejor = i == 0;
+            String fondoFila = esMejor ? "#e8f5e9" : (i % 2 == 0 ? "#ffffff" : "#f7f9fb");
+            String medalla = esMejor ? "🏆 " : "";
+            filas.append("<tr style=\"background:").append(fondoFila).append(";\">")
+                 .append("<td style=\"padding:10px 12px;border-bottom:1px solid #e5e9ec;font-weight:")
+                 .append(esMejor ? "600" : "400").append(";color:#1f2933;\">")
+                 .append(medalla).append(escapeHtml(e.nombre)).append("</td>")
+                 .append("<td style=\"padding:10px 12px;border-bottom:1px solid #e5e9ec;color:#52606d;\">")
+                 .append(escapeHtml(e.municipio)).append("</td>")
+                 .append("<td style=\"padding:10px 12px;border-bottom:1px solid #e5e9ec;text-align:right;font-weight:600;color:")
+                 .append(esMejor ? "#2e7d32" : "#1f2933").append(";\">")
+                 .append(String.format("%.3f €", e.precioGasoleoA)).append("</td>")
+                 .append("<td style=\"padding:10px 12px;border-bottom:1px solid #e5e9ec;text-align:right;color:#8f9bb3;\">")
+                 .append(String.format("%.1f km", e.distanciaKm)).append("</td>")
+                 .append("</tr>\n");
+        }
+
+        return "<!DOCTYPE html>"
+            + "<html lang=\"es\"><head><meta charset=\"UTF-8\"></head>"
+            + "<body style=\"margin:0;padding:0;background:#f0f2f5;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;\">"
+            + "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f0f2f5;padding:24px 0;\">"
+            + "<tr><td align=\"center\">"
+            + "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" "
+            + "style=\"background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);\">"
+            // Cabecera
+            + "<tr><td style=\"background:linear-gradient(135deg,#1e6091,#1a759f);padding:28px 32px;\">"
+            + "<div style=\"font-size:22px;font-weight:700;color:#ffffff;\">⛽ Precios de Gasóleo A</div>"
+            + "<div style=\"font-size:14px;color:#d0e6f3;margin-top:4px;\">Radio de " + (int) RADIO_KM
+            + " km alrededor de Arahal</div>"
+            + "</td></tr>"
+            // Tarjeta resumen
+            + "<tr><td style=\"padding:24px 32px 8px 32px;\">"
+            + "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" "
+            + "style=\"background:#e8f5e9;border-radius:10px;padding:16px 20px;\"><tr><td>"
+            + "<div style=\"font-size:13px;color:#2e7d32;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;\">Más barata</div>"
+            + "<div style=\"font-size:20px;color:#1b5e20;font-weight:700;margin-top:4px;\">"
+            + escapeHtml(mejor.nombre) + " · " + escapeHtml(mejor.municipio) + "</div>"
+            + "<div style=\"font-size:14px;color:#2e7d32;margin-top:2px;\">"
+            + String.format("%.3f €/L a %.1f km", mejor.precioGasoleoA, mejor.distanciaKm)
+            + (ahorro > 0.001 ? String.format(" · ahorras hasta %.3f €/L frente a la más cara de la lista", ahorro) : "")
+            + "</div></td></tr></table>"
+            + "</td></tr>"
+            // Tabla de estaciones
+            + "<tr><td style=\"padding:20px 32px 8px 32px;\">"
+            + "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;font-size:14px;\">"
+            + "<tr style=\"background:#1e6091;\">"
+            + "<th style=\"padding:10px 12px;text-align:left;color:#ffffff;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;\">Estación</th>"
+            + "<th style=\"padding:10px 12px;text-align:left;color:#ffffff;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;\">Municipio</th>"
+            + "<th style=\"padding:10px 12px;text-align:right;color:#ffffff;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;\">€/L</th>"
+            + "<th style=\"padding:10px 12px;text-align:right;color:#ffffff;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;\">Distancia</th>"
+            + "</tr>"
+            + filas
+            + "</table>"
+            + "</td></tr>"
+            // Pie
+            + "<tr><td style=\"padding:20px 32px 28px 32px;\">"
+            + "<div style=\"font-size:12px;color:#9aa5b1;border-top:1px solid #e5e9ec;padding-top:16px;\">"
+            + "Datos del Geoportal de Gasolineras (Ministerio para la Transición Ecológica). "
+            + "Generado automáticamente por GasAlert."
+            + "</div></td></tr>"
+            + "</table>"
+            + "</td></tr></table>"
+            + "</body></html>";
+    }
+
+    private static String escapeHtml(String s) {
+        if (s == null) return "";
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
     }
 
     private static String recortar(String s, int max) {
@@ -177,8 +274,10 @@ public class GasoilAlert {
         return resultado;
     }
 
-    /** Envía el email usando Jakarta Mail vía SMTP (ej. Gmail con contraseña de aplicación). */
-    private static void enviarEmail(String asunto, String cuerpo) throws MessagingException {
+    /** Envía el email usando Jakarta Mail vía SMTP (ej. Gmail con contraseña de aplicación).
+     *  Se envía en formato multipart/alternative: una parte en texto plano (fallback) y
+     *  otra en HTML (la que muestran la mayoría de clientes de correo modernos). */
+    private static void enviarEmail(String asunto, String cuerpoTexto, String cuerpoHtml) throws MessagingException {
         Properties props = new Properties();
         props.put("mail.smtp.auth", "true");
         props.put("mail.smtp.starttls.enable", "true");
@@ -195,7 +294,18 @@ public class GasoilAlert {
         message.setFrom(new InternetAddress(EMAIL_FROM));
         message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(EMAIL_TO));
         message.setSubject(asunto, "UTF-8");
-        message.setText(cuerpo, "UTF-8");
+
+        MimeBodyPart partesTexto = new MimeBodyPart();
+        partesTexto.setText(cuerpoTexto, "UTF-8");
+
+        MimeBodyPart partesHtml = new MimeBodyPart();
+        partesHtml.setContent(cuerpoHtml, "text/html; charset=UTF-8");
+
+        MimeMultipart multipart = new MimeMultipart("alternative");
+        multipart.addBodyPart(partesTexto);
+        multipart.addBodyPart(partesHtml);
+
+        message.setContent(multipart);
 
         Transport.send(message);
     }
