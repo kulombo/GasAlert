@@ -33,9 +33,9 @@ public class GasoilAlert {
 
     private static final String SMTP_HOST = env("SMTP_HOST", "smtp.gmail.com");
     private static final int SMTP_PORT = Integer.parseInt(env("SMTP_PORT", "587"));
-    private static final String EMAIL_FROM = env("EMAIL_FROM", "juanmanuelsanchezgamboa2004@gmail.com");
+    private static final String EMAIL_FROM = env("EMAIL_FROM", "tu_correo@gmail.com");
     private static final String EMAIL_PASSWORD = env("EMAIL_PASSWORD", "tu_contraseña_de_aplicacion");
-    private static final String EMAIL_TO = env("EMAIL_TO", "juanmanuelsanchezgamboa2004@gmail.com");
+    private static final String EMAIL_TO = env("EMAIL_TO", "tu_correo@gmail.com");
     // ==========================================================================================
 
     private static final String API_URL =
@@ -48,7 +48,7 @@ public class GasoilAlert {
     }
 
     public static void main(String[] args) throws Exception {
-        String json = descargarPrecios();
+        String json = descargarPreciosConReintentos(3);
         List<Estacion> estaciones = filtrarPorRadio(json, CENTRO_LAT, CENTRO_LON, RADIO_KM);
 
         if (estaciones.isEmpty()) {
@@ -97,6 +97,25 @@ public class GasoilAlert {
                 * Math.sin(dLon / 2) * Math.sin(dLon / 2);
         double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
         return R * c;
+    }
+
+    /** Reintenta la descarga varias veces si el servidor del Ministerio falla de forma intermitente
+     *  (corte de conexión, timeout, error 5xx...), esperando un poco más entre cada intento. */
+    private static String descargarPreciosConReintentos(int intentosMax) throws Exception {
+        Exception ultimoError = null;
+        for (int intento = 1; intento <= intentosMax; intento++) {
+            try {
+                return descargarPrecios();
+            } catch (Exception e) {
+                ultimoError = e;
+                System.out.println("Intento " + intento + "/" + intentosMax
+                        + " fallido al descargar precios: " + e.getMessage());
+                if (intento < intentosMax) {
+                    Thread.sleep(3000L * intento); // 3s, 6s, 9s...
+                }
+            }
+        }
+        throw new RuntimeException("No se pudo descargar el JSON de precios tras " + intentosMax + " intentos", ultimoError);
     }
 
     /** Descarga el JSON completo de la API pública.
