@@ -6,12 +6,10 @@ import org.json.JSONObject;
 import jakarta.mail.*;
 import jakarta.mail.internet.*;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Descarga los precios de carburantes publicados por el Ministerio
@@ -33,9 +31,9 @@ public class GasoilAlert {
 
     private static final String SMTP_HOST = env("SMTP_HOST", "smtp.gmail.com");
     private static final int SMTP_PORT = Integer.parseInt(env("SMTP_PORT", "587"));
-    private static final String EMAIL_FROM = env("EMAIL_FROM", "juanmanuelsanchezgamboa2004@gmail.com");
-    private static final String EMAIL_PASSWORD = env("EMAIL_PASSWORD", "aura vbpn wksg mmnx");
-    private static final String EMAIL_TO = env("EMAIL_TO", "juanmanuelsanchezgamboa2004@gmail.com");
+    private static final String EMAIL_FROM = env("EMAIL_FROM", "tu_correo@gmail.com");
+    private static final String EMAIL_PASSWORD = env("EMAIL_PASSWORD", "tu_contraseña_de_aplicacion");
+    private static final String EMAIL_TO = env("EMAIL_TO", "tu_correo@gmail.com");
     // ==========================================================================================
 
     private static final String API_URL =
@@ -48,27 +46,15 @@ public class GasoilAlert {
     }
 
     public static void main(String[] args) throws Exception {
-        String json = descargarPreciosConReintentos(0); // el nº de intentos ya no se limita; ver TIEMPO_MAX_ESPERA_MIN
+        String json = descargarPreciosConReintentos(3);
         List<Estacion> estaciones = filtrarPorRadio(json, CENTRO_LAT, CENTRO_LON, RADIO_KM);
 
         if (estaciones.isEmpty()) {
             System.out.println("No se encontraron estaciones con gasóleo A en un radio de " + RADIO_KM + " km.");
-            String mensajeSinDatos = "No se encontraron estaciones con precio de Gasóleo A disponible en un radio de "
-                    + RADIO_KM + " km alrededor del punto configurado.";
-            String htmlSinDatos = "<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"UTF-8\"></head>"
-                    + "<body style=\"margin:0;padding:0;background:#f0f2f5;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;\">"
-                    + "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f0f2f5;padding:24px 0;\">"
-                    + "<tr><td align=\"center\">"
-                    + "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" "
-                    + "style=\"background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);\">"
-                    + "<tr><td style=\"background:linear-gradient(135deg,#1e6091,#1a759f);padding:28px 32px;\">"
-                    + "<div style=\"font-size:22px;font-weight:700;color:#ffffff;\">⛽ Precios de Gasóleo A</div>"
-                    + "</td></tr>"
-                    + "<tr><td style=\"padding:28px 32px;\">"
-                    + "<div style=\"font-size:15px;color:#52606d;line-height:1.5;\">" + escapeHtml(mensajeSinDatos) + "</div>"
-                    + "</td></tr>"
-                    + "</table></td></tr></table></body></html>";
-            enviarEmail("Gasoil cerca de Arahal: sin datos hoy", mensajeSinDatos, htmlSinDatos);
+            enviarEmail(
+                "Gasoil cerca de Arahal: sin datos hoy",
+                htmlSinDatos()
+            );
             return;
         }
 
@@ -76,112 +62,116 @@ public class GasoilAlert {
         List<Estacion> topN = estaciones.subList(0, Math.min(MAX_RESULTADOS, estaciones.size()));
         Estacion masBarata = topN.get(0);
 
-        String asunto = String.format("⛽ Gasoil más barato cerca de Arahal: %.3f €/L - %s (%s)",
-                masBarata.precioGasoleoA, masBarata.nombre, masBarata.municipio);
+        String asunto = String.format("⛽ Gasoil más barato cerca de Arahal: %.3f €/L - %s",
+                masBarata.precioGasoleoA, masBarata.nombre);
 
-        String cuerpoTexto = construirCuerpoTexto(topN);
-        String cuerpoHtml = construirCuerpoHtml(topN);
+        String html = construirHtml(topN);
 
-        System.out.println(cuerpoTexto);
-        enviarEmail(asunto, cuerpoTexto, cuerpoHtml);
+        // También lo imprimimos en texto plano en el log de la ejecución, útil para depurar
+        System.out.println("Gasolineras más baratas en Gasóleo A en un radio de " + (int) RADIO_KM + " km:");
+        for (Estacion e : topN) {
+            System.out.printf("%-30s %-15s %8.3f %7.1f km%n",
+                    recortar(e.nombre, 30), recortar(e.municipio, 15), e.precioGasoleoA, e.distanciaKm);
+        }
+
+        enviarEmail(asunto, html);
         System.out.println("Correo enviado correctamente.");
     }
 
-    /** Versión en texto plano (fallback para clientes de correo que no muestran HTML). */
-    private static String construirCuerpoTexto(List<Estacion> topN) {
-        StringBuilder cuerpo = new StringBuilder();
-        cuerpo.append("Gasolineras más baratas en Gasóleo A en un radio de ")
-              .append((int) RADIO_KM).append(" km alrededor de Arahal:\n\n");
-        cuerpo.append(String.format("%-30s %-15s %8s %8s%n", "Estación", "Municipio", "€/L", "km"));
-        cuerpo.append("-".repeat(65)).append("\n");
-        for (Estacion e : topN) {
-            cuerpo.append(String.format("%-30s %-15s %8.3f %7.1f%n",
-                    recortar(e.nombre, 30), recortar(e.municipio, 15), e.precioGasoleoA, e.distanciaKm));
-        }
-        return cuerpo.toString();
+    private static String recortar(String s, int max) {
+        return s.length() > max ? s.substring(0, max - 1) + "…" : s;
     }
 
-    /** Versión en HTML: tabla con estilos, precio más barato destacado y filas alternas. */
-    private static String construirCuerpoHtml(List<Estacion> topN) {
-        Estacion mejor = topN.get(0);
-        double masCara = topN.stream().mapToDouble(e -> e.precioGasoleoA).max().orElse(mejor.precioGasoleoA);
-        double ahorro = masCara - mejor.precioGasoleoA;
+    /** Construye el cuerpo del email en HTML, con la más barata destacada. */
+    private static String construirHtml(List<Estacion> estaciones) {
+        String fondo = "#f4f6f8";
+        String tarjeta = "#ffffff";
+        String textoPrincipal = "#1a1a1a";
+        String textoSecundario = "#6b7280";
+        String verde = "#16a34a";
+        String bordeSuave = "#e5e7eb";
 
         StringBuilder filas = new StringBuilder();
-        for (int i = 0; i < topN.size(); i++) {
-            Estacion e = topN.get(i);
-            boolean esMejor = i == 0;
-            String fondoFila = esMejor ? "#e8f5e9" : (i % 2 == 0 ? "#ffffff" : "#f7f9fb");
-            String medalla = esMejor ? "🏆 " : "";
+        for (int i = 0; i < estaciones.size(); i++) {
+            Estacion e = estaciones.get(i);
+            boolean esLaMasBarata = (i == 0);
+            String fondoFila = esLaMasBarata ? "#f0fdf4" : (i % 2 == 0 ? tarjeta : "#fafafa");
+            String colorPrecio = esLaMasBarata ? verde : textoPrincipal;
+            String medalla = esLaMasBarata ? "🥇 " : "";
+
             filas.append("<tr style=\"background:").append(fondoFila).append(";\">")
-                 .append("<td style=\"padding:10px 12px;border-bottom:1px solid #e5e9ec;font-weight:")
-                 .append(esMejor ? "600" : "400").append(";color:#1f2933;\">")
+                 .append("<td style=\"padding:10px 12px;border-bottom:1px solid ").append(bordeSuave)
+                 .append(";font-size:14px;color:").append(textoPrincipal).append(";\">")
                  .append(medalla).append(escapeHtml(e.nombre)).append("</td>")
-                 .append("<td style=\"padding:10px 12px;border-bottom:1px solid #e5e9ec;color:#52606d;\">")
+                 .append("<td style=\"padding:10px 12px;border-bottom:1px solid ").append(bordeSuave)
+                 .append(";font-size:14px;color:").append(textoSecundario).append(";\">")
                  .append(escapeHtml(e.municipio)).append("</td>")
-                 .append("<td style=\"padding:10px 12px;border-bottom:1px solid #e5e9ec;text-align:right;font-weight:600;color:")
-                 .append(esMejor ? "#2e7d32" : "#1f2933").append(";\">")
-                 .append(String.format("%.3f €", e.precioGasoleoA)).append("</td>")
-                 .append("<td style=\"padding:10px 12px;border-bottom:1px solid #e5e9ec;text-align:right;color:#8f9bb3;\">")
+                 .append("<td style=\"padding:10px 12px;border-bottom:1px solid ").append(bordeSuave)
+                 .append(";font-size:14px;color:").append(textoSecundario).append(";text-align:right;\">")
                  .append(String.format("%.1f km", e.distanciaKm)).append("</td>")
+                 .append("<td style=\"padding:10px 12px;border-bottom:1px solid ").append(bordeSuave)
+                 .append(";font-size:15px;font-weight:700;color:").append(colorPrecio).append(";text-align:right;\">")
+                 .append(String.format("%.3f €", e.precioGasoleoA)).append("</td>")
                  .append("</tr>\n");
         }
 
-        return "<!DOCTYPE html>"
-            + "<html lang=\"es\"><head><meta charset=\"UTF-8\"></head>"
-            + "<body style=\"margin:0;padding:0;background:#f0f2f5;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;\">"
-            + "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:#f0f2f5;padding:24px 0;\">"
+        Estacion masBarata = estaciones.get(0);
+
+        return "<!DOCTYPE html><html><body style=\"margin:0;padding:0;background:" + fondo + ";font-family:Arial, Helvetica, sans-serif;\">"
+            + "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:" + fondo + ";padding:24px 0;\">"
             + "<tr><td align=\"center\">"
-            + "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" "
-            + "style=\"background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);\">"
+            + "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" style=\"background:" + tarjeta + ";border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.08);\">"
+
             // Cabecera
-            + "<tr><td style=\"background:linear-gradient(135deg,#1e6091,#1a759f);padding:28px 32px;\">"
-            + "<div style=\"font-size:22px;font-weight:700;color:#ffffff;\">⛽ Precios de Gasóleo A</div>"
-            + "<div style=\"font-size:14px;color:#d0e6f3;margin-top:4px;\">Radio de " + (int) RADIO_KM
-            + " km alrededor de Arahal</div>"
+            + "<tr><td style=\"background:#0f172a;padding:24px 28px;\">"
+            + "<div style=\"font-size:22px;\">⛽</div>"
+            + "<div style=\"font-size:19px;font-weight:700;color:#ffffff;margin-top:4px;\">Gasoil cerca de Arahal</div>"
+            + "<div style=\"font-size:13px;color:#94a3b8;margin-top:2px;\">Radio de " + (int) RADIO_KM + " km &middot; " + estaciones.size() + " gasolineras encontradas</div>"
             + "</td></tr>"
-            // Tarjeta resumen
-            + "<tr><td style=\"padding:24px 32px 8px 32px;\">"
-            + "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" "
-            + "style=\"background:#e8f5e9;border-radius:10px;padding:16px 20px;\"><tr><td>"
-            + "<div style=\"font-size:13px;color:#2e7d32;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;\">Más barata</div>"
-            + "<div style=\"font-size:20px;color:#1b5e20;font-weight:700;margin-top:4px;\">"
-            + escapeHtml(mejor.nombre) + " · " + escapeHtml(mejor.municipio) + "</div>"
-            + "<div style=\"font-size:14px;color:#2e7d32;margin-top:2px;\">"
-            + String.format("%.3f €/L a %.1f km", mejor.precioGasoleoA, mejor.distanciaKm)
-            + (ahorro > 0.001 ? String.format(" · ahorras hasta %.3f €/L frente a la más cara de la lista", ahorro) : "")
-            + "</div></td></tr></table>"
-            + "</td></tr>"
-            // Tabla de estaciones
-            + "<tr><td style=\"padding:20px 32px 8px 32px;\">"
-            + "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;font-size:14px;\">"
-            + "<tr style=\"background:#1e6091;\">"
-            + "<th style=\"padding:10px 12px;text-align:left;color:#ffffff;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;\">Estación</th>"
-            + "<th style=\"padding:10px 12px;text-align:left;color:#ffffff;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;\">Municipio</th>"
-            + "<th style=\"padding:10px 12px;text-align:right;color:#ffffff;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;\">€/L</th>"
-            + "<th style=\"padding:10px 12px;text-align:right;color:#ffffff;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;\">Distancia</th>"
+
+            // Destacado del más barato
+            + "<tr><td style=\"padding:20px 28px 8px 28px;\">"
+            + "<div style=\"background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px 18px;\">"
+            + "<div style=\"font-size:12px;color:" + verde + ";font-weight:700;text-transform:uppercase;letter-spacing:0.04em;\">Más barata hoy</div>"
+            + "<div style=\"font-size:20px;font-weight:700;color:" + textoPrincipal + ";margin-top:4px;\">" + escapeHtml(masBarata.nombre) + "</div>"
+            + "<div style=\"font-size:13px;color:" + textoSecundario + ";margin-top:2px;\">" + escapeHtml(masBarata.municipio) + " &middot; " + String.format("%.1f km", masBarata.distanciaKm) + "</div>"
+            + "<div style=\"font-size:28px;font-weight:800;color:" + verde + ";margin-top:8px;\">" + String.format("%.3f €/L", masBarata.precioGasoleoA) + "</div>"
+            + "</div></td></tr>"
+
+            // Tabla completa
+            + "<tr><td style=\"padding:16px 28px 24px 28px;\">"
+            + "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border-collapse:collapse;\">"
+            + "<tr>"
+            + "<th style=\"text-align:left;padding:8px 12px;font-size:11px;color:" + textoSecundario + ";text-transform:uppercase;letter-spacing:0.04em;border-bottom:2px solid " + bordeSuave + ";\">Estación</th>"
+            + "<th style=\"text-align:left;padding:8px 12px;font-size:11px;color:" + textoSecundario + ";text-transform:uppercase;letter-spacing:0.04em;border-bottom:2px solid " + bordeSuave + ";\">Municipio</th>"
+            + "<th style=\"text-align:right;padding:8px 12px;font-size:11px;color:" + textoSecundario + ";text-transform:uppercase;letter-spacing:0.04em;border-bottom:2px solid " + bordeSuave + ";\">Dist.</th>"
+            + "<th style=\"text-align:right;padding:8px 12px;font-size:11px;color:" + textoSecundario + ";text-transform:uppercase;letter-spacing:0.04em;border-bottom:2px solid " + bordeSuave + ";\">€/L</th>"
             + "</tr>"
             + filas
             + "</table>"
             + "</td></tr>"
+
             // Pie
-            + "<tr><td style=\"padding:20px 32px 28px 32px;\">"
-            + "<div style=\"font-size:12px;color:#9aa5b1;border-top:1px solid #e5e9ec;padding-top:16px;\">"
-            + "Datos del Geoportal de Gasolineras (Ministerio para la Transición Ecológica). "
-            + "Generado automáticamente por GasAlert."
-            + "</div></td></tr>"
+            + "<tr><td style=\"padding:16px 28px 24px 28px;border-top:1px solid " + bordeSuave + ";\">"
+            + "<div style=\"font-size:12px;color:" + textoSecundario + ";\">Datos de la API pública del Ministerio para la Transición Ecológica. Generado automáticamente cada día.</div>"
+            + "</td></tr>"
+
             + "</table>"
             + "</td></tr></table>"
             + "</body></html>";
     }
 
-    private static String escapeHtml(String s) {
-        if (s == null) return "";
-        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
+    private static String htmlSinDatos() {
+        return "<!DOCTYPE html><html><body style=\"font-family:Arial, sans-serif;padding:24px;color:#1a1a1a;\">"
+            + "<h2>⛽ Gasoil cerca de Arahal</h2>"
+            + "<p>No se encontraron estaciones con precio de Gasóleo A disponible en un radio de "
+            + (int) RADIO_KM + " km alrededor del punto configurado hoy.</p>"
+            + "</body></html>";
     }
 
-    private static String recortar(String s, int max) {
-        return s.length() > max ? s.substring(0, max - 1) + "…" : s;
+    /** Escapa caracteres especiales de HTML para evitar romper el maquetado con nombres raros de gasolineras. */
+    private static String escapeHtml(String s) {
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
     }
 
     /** Distancia entre dos puntos geográficos en km (fórmula de Haversine). */
@@ -196,64 +186,72 @@ public class GasoilAlert {
         return R * c;
     }
 
-    /** Minutos máximos que se insiste en descargar el JSON antes de rendirse.
-     *  El servidor del Ministerio a veces corta la conexión (handshake TLS) de forma intermitente,
-     *  sobre todo desde IPs de datacenter como las de GitHub Actions; casi siempre basta con reintentar.
-     *  Configurable por variable de entorno para no dejar el job colgado si el bloqueo es persistente. */
-    private static final int TIEMPO_MAX_ESPERA_MIN = Integer.parseInt(env("TIEMPO_MAX_ESPERA_MIN", "30"));
-
-    /** Reintenta la descarga SIN LÍMITE DE INTENTOS hasta conseguirlo, con espera creciente
-     *  entre cada intento (backoff exponencial con tope), hasta un tiempo máximo total. */
-    private static String descargarPreciosConReintentos(int intentosIgnorado) throws Exception {
-        long limiteMillis = System.currentTimeMillis() + TIEMPO_MAX_ESPERA_MIN * 60_000L;
+    /** Reintenta la descarga varias veces si el servidor del Ministerio falla de forma intermitente
+     *  (corte de conexión, timeout, error 5xx...), esperando un poco más entre cada intento. */
+    private static String descargarPreciosConReintentos(int intentosMax) throws Exception {
         Exception ultimoError = null;
-        int intento = 0;
-
-        while (System.currentTimeMillis() < limiteMillis) {
-            intento++;
+        for (int intento = 1; intento <= intentosMax; intento++) {
             try {
                 return descargarPrecios();
             } catch (Exception e) {
                 ultimoError = e;
-                long segundosRestantes = (limiteMillis - System.currentTimeMillis()) / 1000;
-                System.out.println("Intento " + intento + " fallido al descargar precios: " + e.getMessage()
-                        + " (quedan ~" + Math.max(segundosRestantes, 0) + "s antes de rendirse)");
-
-                if (System.currentTimeMillis() >= limiteMillis) break;
-
-                // Backoff exponencial con tope de 60s, más un poco de aleatoriedad
-                // para no repetir el fallo justo en el mismo instante cada vez.
-                long esperaMs = Math.min(3000L * (1L << Math.min(intento, 6)), 60_000L);
-                esperaMs += (long) (Math.random() * 2000);
-                Thread.sleep(esperaMs);
+                System.out.println("Intento " + intento + "/" + intentosMax
+                        + " fallido al descargar precios: " + e.getMessage());
+                if (intento < intentosMax) {
+                    Thread.sleep(3000L * intento); // 3s, 6s, 9s...
+                }
             }
         }
-
-        throw new RuntimeException("No se pudo descargar el JSON de precios tras " + intento
-                + " intentos en " + TIEMPO_MAX_ESPERA_MIN + " minutos", ultimoError);
+        throw new RuntimeException("No se pudo descargar el JSON de precios tras " + intentosMax + " intentos", ultimoError);
     }
 
-    /** Descarga el JSON completo de la API pública.
-     *  Se envían cabeceras de navegador porque el servidor del Ministerio
-     *  bloquea peticiones que no las incluyen (protección anti-bot). */
+    /** Descarga el JSON completo de la API pública ejecutando `curl` como proceso externo.
+     *  Motivo: el cliente HTTP nativo de Java (HttpClient) es bloqueado sistemáticamente
+     *  por la protección anti-bot del servidor del Ministerio (corta el handshake TLS),
+     *  tanto desde GitHub Actions como desde una IP residencial normal. `curl` sí funciona
+     *  de forma consistente en ambos casos (usa el stack TLS del sistema operativo, no el
+     *  de la JVM), así que delegamos la descarga en él. `curl` viene preinstalado tanto en
+     *  Windows 10/11 como en los runners de GitHub Actions (Ubuntu). */
     private static String descargarPrecios() throws Exception {
-        HttpClient client = HttpClient.newHttpClient();
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(API_URL))
-                .header("Accept", "application/json, text/plain, */*")
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                        + "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
-                .header("Accept-Language", "es-ES,es;q=0.9,en;q=0.8")
-                .header("Referer", "https://sedeaplicaciones.minetur.gob.es/")
-                .header("Origin", "https://sedeaplicaciones.minetur.gob.es")
-                .GET()
-                .build();
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-        if (response.statusCode() != 200) {
-            throw new RuntimeException("La API del Ministerio devolvió el código " + response.statusCode()
-                    + ". Cuerpo: " + response.body().substring(0, Math.min(300, response.body().length())));
+        List<String> comando = List.of(
+                "curl",
+                "-s",                    // modo silencioso, sin barra de progreso
+                "--max-time", "25",      // corta sola si tarda más de 25s
+                "-H", "Accept: application/json, text/plain, */*",
+                "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        + "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                "-H", "Accept-Language: es-ES,es;q=0.9,en;q=0.8",
+                "-H", "Referer: https://sedeaplicaciones.minetur.gob.es/",
+                "-H", "Origin: https://sedeaplicaciones.minetur.gob.es",
+                API_URL
+        );
+
+        Process proceso = new ProcessBuilder(comando).start();
+
+        String salida;
+        try (InputStream is = proceso.getInputStream()) {
+            salida = new String(is.readAllBytes(), StandardCharsets.UTF_8);
         }
-        return response.body();
+        String salidaError;
+        try (InputStream es = proceso.getErrorStream()) {
+            salidaError = new String(es.readAllBytes(), StandardCharsets.UTF_8);
+        }
+
+        boolean terminoATiempo = proceso.waitFor(30, TimeUnit.SECONDS);
+        if (!terminoATiempo) {
+            proceso.destroyForcibly();
+            throw new RuntimeException("curl no respondió en 30s (colgado o red muy lenta)");
+        }
+
+        int codigoSalida = proceso.exitValue();
+        if (codigoSalida != 0) {
+            throw new RuntimeException("curl terminó con código " + codigoSalida
+                    + (salidaError.isBlank() ? "" : ": " + salidaError.trim()));
+        }
+        if (salida.isBlank()) {
+            throw new RuntimeException("curl devolvió una respuesta vacía");
+        }
+        return salida;
     }
 
     /** Extrae las estaciones dentro de un radio (km) alrededor de un punto, con precio de Gasóleo A. */
@@ -292,15 +290,16 @@ public class GasoilAlert {
         return resultado;
     }
 
-    /** Envía el email usando Jakarta Mail vía SMTP (ej. Gmail con contraseña de aplicación).
-     *  Se envía en formato multipart/alternative: una parte en texto plano (fallback) y
-     *  otra en HTML (la que muestran la mayoría de clientes de correo modernos). */
-    private static void enviarEmail(String asunto, String cuerpoTexto, String cuerpoHtml) throws MessagingException {
+    /** Envía el email usando Jakarta Mail vía SMTP (ej. Gmail con contraseña de aplicación). */
+    private static void enviarEmail(String asunto, String cuerpoHtml) throws MessagingException {
         Properties props = new Properties();
         props.put("mail.smtp.auth", "true");
         props.put("mail.smtp.starttls.enable", "true");
         props.put("mail.smtp.host", SMTP_HOST);
         props.put("mail.smtp.port", String.valueOf(SMTP_PORT));
+        props.put("mail.smtp.connectiontimeout", "15000"); // 15s para conectar
+        props.put("mail.smtp.timeout", "15000");            // 15s para leer respuesta
+        props.put("mail.smtp.writetimeout", "15000");       // 15s para escribir
 
         Session session = Session.getInstance(props, new Authenticator() {
             protected PasswordAuthentication getPasswordAuthentication() {
@@ -312,18 +311,7 @@ public class GasoilAlert {
         message.setFrom(new InternetAddress(EMAIL_FROM));
         message.setRecipients(Message.RecipientType.TO, InternetAddress.parse(EMAIL_TO));
         message.setSubject(asunto, "UTF-8");
-
-        MimeBodyPart partesTexto = new MimeBodyPart();
-        partesTexto.setText(cuerpoTexto, "UTF-8");
-
-        MimeBodyPart partesHtml = new MimeBodyPart();
-        partesHtml.setContent(cuerpoHtml, "text/html; charset=UTF-8");
-
-        MimeMultipart multipart = new MimeMultipart("alternative");
-        multipart.addBodyPart(partesTexto);
-        multipart.addBodyPart(partesHtml);
-
-        message.setContent(multipart);
+        message.setContent(cuerpoHtml, "text/html; charset=UTF-8");
 
         Transport.send(message);
     }
